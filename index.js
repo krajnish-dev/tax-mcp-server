@@ -2,119 +2,90 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-// Initialize Express app
 const app = express();
-app.use(express.json()); // Parse JSON request bodies
+app.use(express.json());
 
-// Step 1: Create the MCP server instance
-console.log("Initializing MCP server...");
 const server = new McpServer({
-    name: "Tax Calculation MCP Server",
-    version: "1.0.0",
-    capabilities: {}
+  name: "MCP Server",
+  version: "1.0.0"
 });
 console.log("MCP server initialized.");
 
-// Step 2: Register the tax calculation tool
-console.log("Registering 'calculateTax' tool...");
-server.tool(
-    "calculateTax",
-    "Calculates sales tax based on amount and jurisdiction.",
-    {
-        amount: z.number().describe("The transaction amount"),
-        jurisdiction: z.string().describe("The tax jurisdiction code (e.g., CA, NY, TX, IN)")
-    },
-    async ({ amount, jurisdiction }) => {
-        console.log(`Received request: amount=${amount}, jurisdiction=${jurisdiction}`);
-        const taxRates = { CA: 0.075, NY: 0.085, TX: 0.065 };
-        const rate = taxRates[jurisdiction] || 0.05;
-        const tax = amount * rate;
-        console.log(`Calculated tax: ${tax} (rate: ${rate})`);
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: `Tax for $${amount} in ${jurisdiction}: $${tax.toFixed(2)} (Rate: ${(rate * 100).toFixed(1)}%)`
-                }
-            ]
-        };
+// Store the handler reference
+let getWeatherHandler = null;
+
+getWeatherHandler = async ({ city }) => {
+  try {
+    // Step 1: Get coordinates for the city
+    const geoResponse = await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${city}&count=1&language=en&format=json`
+    );
+    const geoData = await geoResponse.json();
+
+    // Handle city not found
+    if (!geoData.results || geoData.results.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Sorry, I couldn't find a city named "${city}". Please check the spelling and try again.`
+          }
+        ]
+      };
     }
-);
-console.log("'calculateTax' tool registered.");
 
-// Step 3: Set up JSON-RPC over HTTP with Express
-console.log("Setting up JSON-RPC endpoint...");
+    // Step 2: Get weather data using coordinates
+    const { latitude, longitude } = geoData.results[0];
+    const weatherResponse = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code&hourly=temperature_2m,precipitation&forecast_days=1`
+    );
+    const weatherData = await weatherResponse.json();
 
-// POST /mcp: Handle JSON-RPC requests
-app.post("/mcp", async (req, res) => {
-    try {
-        const jsonRpcRequest = req.body;
-        const needsStreaming = jsonRpcRequest.method === "calculateTax" && jsonRpcRequest.params.stream; // Example condition for streaming
-
-        if (needsStreaming) {
-            // Set up SSE for streaming responses
-            res.setHeader("Content-Type", "text/event-stream");
-            res.setHeader("Cache-Control", "no-cache");
-            res.setHeader("Connection", "keep-alive");
-
-            // Example: Stream multiple responses (e.g., tax calculation steps)
-            const response = await server.handle(jsonRpcRequest); // Assuming MCP server has a handle method
-            res.write(`data: ${JSON.stringify(response)}\n\n`);
-
-            // Simulate additional streaming updates (customize as needed)
-            setTimeout(() => {
-                res.write(`data: ${JSON.stringify({
-                    jsonrpc: "2.0",
-                    result: { content: [{ type: "text", text: "Streaming update: Tax calculation complete" }] },
-                    id: jsonRpcRequest.id
-                })}\n\n`);
-                res.end();
-            }, 1000);
-        } else {
-            // Single JSON response
-            const response = await server.handle(jsonRpcRequest);
-            res.json(response);
+    // Return the complete weather data as JSON
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(weatherData, null, 2)
         }
-    } catch (error) {
-        res.status(500).json({
-            jsonrpc: "2.0",
-            error: { code: -32000, message: error.message },
-            id: req.body.id || null
-        });
-    }
+      ]
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error fetching weather data: ${error.message}`
+        }
+      ]
+    };
+  }
+};
+
+server.tool(
+  'get-weather',
+  'Tool to get the weather of a city',
+  {
+    city: z.string().describe("The name of the city to get the weather for")
+  },
+  getWeatherHandler
+);
+
+// HTTP endpoint for MCP tool
+app.post("/mcp", async (req, res) => {
+  const { tool, params } = req.body;
+  if (tool !== "get-weather" || !params) {
+    return res.status(400).json({ error: "Missing or invalid 'tool' or 'params' in request body." });
+  }
+  try {
+    const result = await getWeatherHandler(params);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// GET /mcp: Support server-initiated SSE streams
-app.get("/mcp", (req, res) => {
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-
-    // Example: Send server-initiated notifications
-    res.write(`data: ${JSON.stringify({
-        jsonrpc: "2.0",
-        method: "serverNotification",
-        params: { message: "Server is online" }
-    })}\n\n`);
-
-    // Keep the connection alive and send periodic updates
-    const interval = setInterval(() => {
-        res.write(`data: ${JSON.stringify({
-            jsonrpc: "2.0",
-            method: "serverNotification",
-            params: { message: "Server heartbeat" }
-        })}\n\n`);
-    }, 30000);
-
-    // Clean up on connection close
-    req.on("close", () => {
-        clearInterval(interval);
-        res.end();
-    });
-});
-
-// Start the server
-const port = 3000;
-app.listen(port, () => {
-    console.log(`MCP server running on port ${port}`);
+const PORT = 3000;
+app.listen(PORT, () => {
+  console.log(`MCP HTTP server listening on port ${PORT}`);
 });
