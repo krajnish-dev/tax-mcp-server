@@ -62,6 +62,39 @@ getWeatherHandler = async ({ city }) => {
   }
 };
 
+// Hardcoded tax rates for jurisdictions
+const taxRates = {
+  "California": 0.0725,
+  "Texas": 0.0625,
+  "New York": 0.04,
+  "Florida": 0.06,
+  "Illinois": 0.0625
+};
+
+// Tax calculation handler
+const calculateTaxHandler = async ({ amount, jurisdiction }) => {
+  if (!taxRates[jurisdiction]) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Jurisdiction "${jurisdiction}" not supported. Supported: ${Object.keys(taxRates).join(", ")}`
+        }
+      ]
+    };
+  }
+  const tax = amount * taxRates[jurisdiction];
+  const total = amount + tax;
+  return {
+    content: [
+      {
+        type: "text",
+        text: `For ${jurisdiction}: Amount = $${amount.toFixed(2)}, Tax = $${tax.toFixed(2)}, Total = $${total.toFixed(2)}`
+      }
+    ]
+  };
+};
+
 server.tool(
   'get-weather',
   'Tool to get the weather of a city',
@@ -71,14 +104,32 @@ server.tool(
   getWeatherHandler
 );
 
-// HTTP endpoint for MCP tool
+// Register the tax tool
+server.tool(
+  'calculate-tax',
+  'Tool to calculate tax for a given jurisdiction',
+  {
+    amount: z.number().describe("The amount to calculate tax on"),
+    jurisdiction: z.string().describe("The jurisdiction to use for tax calculation")
+  },
+  calculateTaxHandler
+);
+
+// Update the /mcp endpoint to support both tools
 app.post("/mcp", async (req, res) => {
   const { tool, params } = req.body;
-  if (tool !== "get-weather" || !params) {
+  if (!tool || !params) {
     return res.status(400).json({ error: "Missing or invalid 'tool' or 'params' in request body." });
   }
   try {
-    const result = await getWeatherHandler(params);
+    let result;
+    if (tool === "get-weather") {
+      result = await getWeatherHandler(params);
+    } else if (tool === "calculate-tax") {
+      result = await calculateTaxHandler(params);
+    } else {
+      return res.status(400).json({ error: "Unknown tool." });
+    }
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
