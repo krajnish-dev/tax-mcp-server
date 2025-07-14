@@ -2,3 +2,4 @@ node_modules
 /STDIO-MCP-index.js
 /server.js
 .vscode
+.env

@@ -1,7 +1,10 @@
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import dotenv from "dotenv";
 
+
+dotenv.config();
 const app = express();
 app.use(express.json());
 
@@ -183,7 +186,7 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`MCP HTTP server listening on port ${PORT}`);
 });
